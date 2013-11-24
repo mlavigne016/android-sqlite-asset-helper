@@ -1,3 +1,5 @@
 include ':example-v1'
 include ':example-v2'
+include ':example-scripts-v1'
+include ':example-scripts-v2'
 include ':core'

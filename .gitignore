@@ -19,3 +19,11 @@ example-v2/build/
 example-v3/local.properties
 example-v3/bin/
 example-v3/gen/
+example-scripts-v1/local.properties
+example-scripts-v1/bin/
+example-scripts-v1/gen/
+example-scripts-v1/build/
+example-scripts-v2/local.properties
+example-scripts-v2/bin/
+example-scripts-v2/gen/
+example-scripts-v2/build/

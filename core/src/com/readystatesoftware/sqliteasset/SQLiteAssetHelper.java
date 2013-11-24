@@ -77,8 +77,31 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 	private String mDatabasePath;
 	private String mArchivePath;
 	private String mUpgradePathFormat;
+    private String mCreatePathFormat;
 
 	private int mForcedUpgradeVersion = 0;
+
+    private boolean mCreateUsingScript;
+
+    /**
+     * Create a helper object to create, open, and/or manage a database in
+     * a specified location.
+     * This method always returns very quickly.  The database is not actually
+     * created or opened until one of {@link #getWritableDatabase} or
+     * {@link #getReadableDatabase} is called.
+     *
+     * @param context to use to open or create the database
+     * @param name of the database file
+     * @param storageDirectory to store the database file upon creation; caller must
+     *     ensure that the specified absolute path is available and can be written to
+     * @param factory to use for creating cursor objects, or null for the default
+     * @param version number of the database (starting at 1); if the database is older,
+     *     SQL file(s) contained within the application assets folder will be used to
+     *     upgrade the database
+     */
+    public SQLiteAssetHelper(Context context, String name, String storageDirectory, CursorFactory factory, int version) {
+        this(context, name, storageDirectory, factory, version, false);
+    }
 	
 	 /**
      * Create a helper object to create, open, and/or manage a database in 
@@ -95,8 +118,10 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
      * @param version number of the database (starting at 1); if the database is older,
      *     SQL file(s) contained within the application assets folder will be used to 
      *     upgrade the database
+     * @param createUsingScript set to true if a sql script should be used to create
+     *     the database instead of a DB file copied from the assets directory
      */
-	public SQLiteAssetHelper(Context context, String name, String storageDirectory, CursorFactory factory, int version) {
+	public SQLiteAssetHelper(Context context, String name, String storageDirectory, CursorFactory factory, int version, boolean createUsingScript) {
 		super(context, name, factory, version);
 
 		if (version < 1) throw new IllegalArgumentException("Version must be >= 1, was " + version);
@@ -106,6 +131,7 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 		mName = name;
 		mFactory = factory;
 		mNewVersion = version;
+        mCreateUsingScript = createUsingScript;
 
 		mArchivePath = ASSET_DB_PATH + "/" + name + ".zip";
 		if (storageDirectory != null) {
@@ -114,6 +140,7 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 			mDatabasePath = context.getApplicationInfo().dataDir + "/databases";
 		}
 		mUpgradePathFormat = ASSET_DB_PATH + "/" + name + "_upgrade_%s-%s.sql";
+        mCreatePathFormat = ASSET_DB_PATH + "/" + name + "_v%s.sql";
 	}
 	
 	 /**
@@ -131,7 +158,7 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
      *     upgrade the database
      */
 	public SQLiteAssetHelper(Context context, String name, CursorFactory factory, int version) {
-		this(context, name, null, factory, version);
+		this(context, name, null, factory, version, false);
 	}
 
 
@@ -374,13 +401,21 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 			// database already exists
 			if (force) {
 				Log.w(TAG, "forcing database upgrade!");
-				copyDatabaseFromAssets();
+                if (mCreateUsingScript) {
+                    createDatabaseFromScript();
+                } else {
+				    copyDatabaseFromAssets();
+                }
 				db = returnDatabase();
 			}
 			return db;
 		} else {
-			// database does not exist, copy it from assets and return it
-			copyDatabaseFromAssets();
+			// database does not exist, copy it from assets or create it from a script and return it
+            if (mCreateUsingScript) {
+                createDatabaseFromScript();
+            } else {
+			    copyDatabaseFromAssets();
+            }
 			db = returnDatabase();
 			return db;
 		}
@@ -460,6 +495,10 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 		}
 		
 	}
+
+    private String getCreateScriptFilePath(int version) {
+        return String.format(mCreatePathFormat, version);
+    }
 	
 	private void writeExtractedFileToDisk(ZipInputStream zin, OutputStream outs) throws IOException {
 		byte[] buffer = new byte[1024];
@@ -485,6 +524,45 @@ public class SQLiteAssetHelper extends SQLiteOpenHelper {
 	private String convertStreamToString(InputStream is) { 
 	    return new Scanner(is).useDelimiter("\\A").next();
 	}
+
+    private void createDatabaseFromScript() {
+        String scriptPath = getCreateScriptFilePath(mNewVersion);
+
+        // try to open the script
+        InputStream is = null;
+        try {
+            is = mContext.getAssets().open(scriptPath);
+        } catch (IOException e) {
+            Log.e(TAG, "unable to locate create script for version " + mNewVersion);
+            SQLiteAssetException se = new SQLiteAssetException("unable to locate create script for version " + mNewVersion);
+            se.setStackTrace(e.getStackTrace());
+            throw se;
+        }
+
+        File f = new File(mDatabasePath + "/");
+        if (!f.exists()) { f.mkdir(); }
+
+        SQLiteDatabase db = null;
+        try {
+            // create the database
+            db = SQLiteDatabase.openDatabase(mDatabasePath + "/" + mName, mFactory, SQLiteDatabase.CREATE_IF_NECESSARY);
+
+            // process the create script
+            Log.w(TAG, "processing create from script: " + scriptPath);
+            String sql = convertStreamToString(is);
+            if (sql != null) {
+                List<String> cmds = splitSqlScript(sql, ';');
+                for (String cmd : cmds) {
+                    //Log.d(TAG, "cmd=" + cmd);
+                    if (cmd.trim().length() > 0) {
+                        db.execSQL(cmd);
+                    }
+                }
+            }
+        } finally {
+            if (db != null) db.close();
+        }
+    }
 
 	/**
 	 * Compare paths by their upgrade version numbers, instead of using
